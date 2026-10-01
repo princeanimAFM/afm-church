@@ -250,6 +250,27 @@
   .shots img { display: block; width: 100%; aspect-ratio: 3 / 4; object-fit: cover; border-radius: 14px; }
   .shots figcaption { font-size: 13px; font-weight: 700; margin-top: 8px; color: var(--ink-2); }
   .shots figcaption span { display: block; font-weight: 600; color: var(--gold-ink); }
+  .frag.launched { grid-template-columns: 1fr; gap: 28px; }
+  .shots.products { grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 18px; }
+  .product { background: #fff; border: 1px solid var(--line); border-radius: 18px; overflow: hidden; display: flex; flex-direction: column; }
+  .product img { border-radius: 0; aspect-ratio: 4 / 5; }
+  .product .pb { padding: 14px 16px 16px; display: flex; flex-direction: column; gap: 8px; flex: 1; }
+  .product h3 { margin: 0; font-size: 18px; }
+  .product .tag { color: var(--ink-2); font-size: 13.5px; margin: 0; }
+  .product .sizes { display: flex; gap: 6px; flex-wrap: wrap; }
+  .product .sizes button { font: inherit; font-size: 13px; font-weight: 700; padding: 6px 12px; border-radius: 999px; border: 1.5px solid var(--line); background: #fff; color: var(--ink-2); cursor: pointer; }
+  .product .sizes button[aria-pressed="true"] { background: var(--green-800); border-color: var(--green-800); color: #fff; }
+  .product .price { font-size: 22px; font-weight: 800; color: var(--green-800); font-variant-numeric: tabular-nums; }
+  .product .acts { display: flex; gap: 8px; flex-wrap: wrap; margin-top: auto; }
+  .product .acts a, .product .acts button { font: inherit; font-size: 13.5px; font-weight: 700; padding: 8px 14px; border-radius: 999px; text-decoration: none; border: 1.5px solid var(--green-800); color: var(--green-800); background: #fff; cursor: pointer; }
+  .product .acts .primary { background: var(--green-800); color: #fff; }
+  .order-note { margin-top: 10px; color: var(--ink-2); font-size: 15px; }
+  .order-note a { color: var(--green-800); font-weight: 700; }
+  dialog.video { border: 0; padding: 0; border-radius: 16px; width: min(92vw, 900px); background: #000; }
+  dialog.video::backdrop { background: rgba(3,12,30,.8); }
+  dialog.video .frame { position: relative; aspect-ratio: 16 / 9; }
+  dialog.video iframe, dialog.video video { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+  dialog.video .close { position: absolute; top: 8px; right: 8px; z-index: 2; font: inherit; font-weight: 800; background: rgba(0,0,0,.6); color: #fff; border: 0; border-radius: 999px; padding: 6px 12px; cursor: pointer; }
   .soon { display: inline-block; margin-top: 18px; font-size: 12.5px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; padding: 7px 14px; border-radius: 999px; background: var(--green-800); color: var(--gold-soft); }
 
   /* Give */
@@ -567,6 +588,7 @@
         <h2 class="title">A fragrance of excellence.</h2>
         <p class="lead">The luxury perfume house founded by Prophet Micah Felix Azanduna, CEO and founder, crafted as a symbol of excellence.</p>
         <span class="soon" id="fragSoon">Coming soon</span>
+        <p class="order-note" id="fragOrder" hidden></p>
       </div>
       <div class="shots" id="fragGrid">
         <figure><img src="fr-miracle-oud.jpg" alt="Miracle Oud perfume bottle"><figcaption>Miracle Oud</figcaption></figure>
@@ -575,6 +597,8 @@
       </div>
     </div>
   </section>
+
+  <dialog class="video" id="videoBox" aria-label="Perfume video"><button class="close" type="button" id="videoClose">Close ✕</button><div class="frame" id="videoFrame"></div></dialog>
 
   <section id="give">
     <div class="wrap">
@@ -758,15 +782,48 @@
     if (Array.isArray(o.perfumes) && o.perfumes.length) {
       const g = document.getElementById('fragGrid'); g.innerHTML = '';
       const local = { 'asset:perfume-1': 'fr-excellent-spirit.jpg', 'asset:perfume-2': 'fr-miracle-oud.jpg', 'asset:perfume-3': 'fr-green-pastures.jpg', 'asset:perfume-4': 'fr-man-of-god.jpg', 'asset:perfume-5': 'fr-man-of-god-label.jpg' };
+      const launched = !!d.storeLaunched;
+      const phones = String(d.orderPhones == null ? '0592 717 859, 0555 181 555' : d.orderPhones).split(',').map(x => x.trim()).filter(Boolean);
+      const mail = d.email || 'theafmfamily@gmail.com';
+      const tel = p => { const n = p.replace(/[^\d+]/g, ''); return 'tel:' + (/^0\d{9}$/.test(n) ? '+233' + n.slice(1) : n); };
+      const split = v => String(v || '').split(/\s*[·|]\s*/).map(x => x.trim()).filter(Boolean);
       o.perfumes.filter(f => f.name).forEach(f => {
-        const fig = el('figure'); const src = local[f.image] || safeUrl(f.image);
-        if (src) { const i = el('img'); i.src = src; i.alt = f.name + ' perfume'; i.loading = 'lazy'; fig.append(i); }
-        const cap = el('figcaption', '', f.name);
-        const extra = [f.size, f.price].filter(Boolean).join(' · ');
-        if (extra) cap.append(el('span', '', extra));
-        fig.append(cap); g.append(fig);
+        const src = local[f.image] || safeUrl(f.image);
+        if (!launched) {
+          const fig = el('figure');
+          if (src) { const i = el('img'); i.src = src; i.alt = f.name + ' perfume'; i.loading = 'lazy'; fig.append(i); }
+          fig.append(el('figcaption', '', f.name)); g.append(fig); return;
+        }
+        const card = el('article', 'product');
+        if (src) { const i = el('img'); i.src = src; i.alt = f.name + ' perfume'; i.loading = 'lazy'; card.append(i); }
+        const b = el('div', 'pb'); b.append(el('h3', '', f.name));
+        if (f.tagline) b.append(el('p', 'tag', f.tagline));
+        const sizes = split(f.size), prices = split(f.price);
+        const priceEl = el('div', 'price', prices[0] || f.price || '');
+        let chosen = sizes[0] || f.size || '';
+        if (sizes.length > 1 && sizes.length === prices.length) {
+          const row = el('div', 'sizes');
+          sizes.forEach((sz, n) => {
+            const btn = el('button', '', sz); btn.type = 'button'; btn.setAttribute('aria-pressed', n === 0);
+            btn.addEventListener('click', () => { row.querySelectorAll('button').forEach(x => x.setAttribute('aria-pressed', x === btn)); priceEl.textContent = prices[n]; chosen = sz; });
+            row.append(btn);
+          });
+          b.append(row);
+        } else if (f.size) b.append(el('p', 'tag', f.size));
+        b.append(priceEl);
+        const acts = el('div', 'acts');
+        if (safeUrl(f.video)) { const v = el('button', '', '▶ The vision'); v.type = 'button'; v.addEventListener('click', () => playVideo(f.video)); acts.append(v); }
+        if (phones[0]) { const c = el('a', 'primary', 'Call to order'); c.href = tel(phones[0]); acts.append(c); }
+        const m = el('a', '', 'Email'); m.addEventListener('click', () => { m.href = 'mailto:' + mail + '?subject=' + encodeURIComponent('Order: ' + f.name + (chosen ? ' (' + chosen + ')' : '')) + '&body=' + encodeURIComponent('Hello, I would like to order ' + f.name + (chosen ? ' (' + chosen + ')' : '') + '.'); }); m.href = 'mailto:' + mail; acts.append(m);
+        b.append(acts); card.append(b); g.append(card);
       });
-      if (d.storeLaunched) { const soon = document.getElementById('fragSoon'); if (safeUrl(d.shopUrl)) { soon.textContent = 'Shop now ↗'; } else { soon.textContent = 'Now available'; } }
+      if (launched) {
+        g.classList.add('products'); g.closest('.frag').classList.add('launched');
+        const soon = document.getElementById('fragSoon'); soon.textContent = safeUrl(d.shopUrl) ? 'Shop now ↗' : 'Now available';
+        const note = document.getElementById('fragOrder'); note.hidden = false; note.textContent = 'Order & enquiries: ';
+        phones.forEach((p, n) => { const a = el('a', '', p); a.href = tel(p); note.append(a, document.createTextNode(n < phones.length - 1 ? ' · ' : ' · ')); });
+        const ma = el('a', '', mail); ma.href = 'mailto:' + mail; note.append(ma);
+      }
     }
     if (Array.isArray(o.services) && o.services.length) {
       const g = document.getElementById('svcGrid'); g.innerHTML = '';
@@ -777,6 +834,24 @@
       });
     }
   }).catch(() => {});
+
+  // Perfume videos (YouTube, Google Drive or .mp4)
+  const videoBox = document.getElementById('videoBox'), videoFrame = document.getElementById('videoFrame');
+  function playVideo(link) {
+    const yt = link.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?(?:.*&)?v=|shorts\/|embed\/|live\/))([\w-]{11})/i);
+    const dr = link.match(/drive\.google\.com\/(?:file\/d\/|open\?(?:.*&)?id=|uc\?(?:.*&)?id=)([\w-]{10,})/i);
+    videoFrame.innerHTML = '';
+    if (yt || dr) {
+      const f = el('iframe'); f.allow = 'autoplay; fullscreen; picture-in-picture'; f.allowFullscreen = true;
+      f.src = yt ? 'https://www.youtube.com/embed/' + yt[1] + '?autoplay=1&rel=0&playsinline=1' : 'https://drive.google.com/file/d/' + dr[1] + '/preview';
+      videoFrame.append(f);
+    } else { const v = el('video'); v.src = link; v.controls = true; v.autoplay = true; v.playsInline = true; videoFrame.append(v); }
+    if (videoBox.showModal) videoBox.showModal(); else window.open(link, '_blank');
+  }
+  const closeVideo = () => { videoBox.close(); videoFrame.innerHTML = ''; };
+  document.getElementById('videoClose').addEventListener('click', closeVideo);
+  videoBox.addEventListener('click', e => { if (e.target === videoBox) closeVideo(); });
+  videoBox.addEventListener('close', () => { videoFrame.innerHTML = ''; });
 
   // Phone menu
   const menuBtn = document.getElementById('menuBtn'), mainNav = document.getElementById('mainNav');
