@@ -109,6 +109,9 @@
   .svc .day { font-size: 12.5px; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; color: var(--gold-ink); }
   .svc h3 { font-family: var(--serif); font-size: 23px; margin: 0; line-height: 1.2; }
   .svc .when { font-size: 26px; font-weight: 800; color: var(--green-800); font-variant-numeric: tabular-nums; }
+  .svc .when small { font-size: 12.5px; font-weight: 800; letter-spacing: .08em; color: var(--gold-ink); margin-left: 4px; }
+  .svc .local { font-size: 14.5px; font-weight: 700; color: var(--green-800); background: #EAF2FD; border-radius: 8px; padding: 6px 10px; align-self: flex-start; }
+  .svc .local:empty { display: none; }
   .svc p { margin: 0; color: var(--ink-2); font-size: 14.5px; }
   .visit { margin-top: 28px; display: grid; grid-template-columns: 1fr auto; gap: 18px; align-items: center; background: var(--green-800); color: #fff; border-radius: 18px; padding: 24px 26px; }
   .visit b { font-family: var(--serif); font-size: 22px; display: block; }
@@ -392,19 +395,19 @@
     <div class="wrap">
       <div class="kicker">Weekly services</div>
       <h2 class="title">Worship with us every week.</h2>
-      <p class="lead">Join us in person at the AFM Center in Sunyani, or online wherever you are.</p>
+      <p class="lead">Join us in person at the AFM Center in Sunyani, or online wherever you are. Times are Ghana time (GMT); outside Ghana, each service also shows the time where you are.</p>
       <div class="services" id="svcGrid">
         <article class="svc">
-          <div class="top"><span class="big">Sun</span><span class="when">8:00 AM</span></div><div class="body"><span class="day">Every Sunday morning</span><h3>International Word Assembly</h3><p>Sunday worship and the Word with Prophet Micah Felix Azanduna.</p><span class="where">AFM Center, Sunyani</span></div>
+          <div class="top"><span class="big">Sun</span><span class="when">8:00 AM<small>GMT</small></span></div><div class="body"><span class="day">Every Sunday morning</span><span class="local" data-dow="0" data-time="08:00"></span><h3>International Word Assembly</h3><p>Sunday worship and the Word with Prophet Micah Felix Azanduna.</p><span class="where">AFM Center, Sunyani</span></div>
         </article>
         <article class="svc">
-          <div class="top"><span class="big">Tue</span><span class="when">6:00 PM</span></div><div class="body"><span class="day">Every Tuesday</span><h3>Time with the Rabbi</h3><p>Midweek teaching with Dr. Micah Felix Azanduna.</p><span class="where">AFM Center, Sunyani</span></div>
+          <div class="top"><span class="big">Tue</span><span class="when">6:00 PM<small>GMT</small></span></div><div class="body"><span class="day">Every Tuesday</span><span class="local" data-dow="2" data-time="18:00"></span><h3>Time with the Rabbi</h3><p>Midweek teaching with Dr. Micah Felix Azanduna.</p><span class="where">AFM Center, Sunyani</span></div>
         </article>
         <article class="svc">
-          <div class="top"><span class="big">Fri</span><span class="when">6:00 PM</span></div><div class="body"><span class="day">Every Friday night</span><h3>Friday Miracle Service</h3><p>A prophetic, healing and miracles service. 6 PM prompt.</p><span class="where">AFM Center, Sunyani</span></div>
+          <div class="top"><span class="big">Fri</span><span class="when">6:00 PM<small>GMT</small></span></div><div class="body"><span class="day">Every Friday night</span><span class="local" data-dow="5" data-time="18:00"></span><h3>Friday Miracle Service</h3><p>A prophetic, healing and miracles service. 6 PM prompt.</p><span class="where">AFM Center, Sunyani</span></div>
         </article>
         <article class="svc online">
-          <div class="top"><span class="big">Sun</span><span class="when">8:00 PM</span></div><div class="body"><span class="day">Every Sunday night · Ghana time</span><h3>International Online Prayer Connect</h3><p>Pray with the AFM family around the world.</p><a class="where" href="#prayer" style="color:#1B6FD1">On Zoom · meeting details below</a></div>
+          <div class="top"><span class="big">Sun</span><span class="when">8:00 PM<small>GMT</small></span></div><div class="body"><span class="day">Every Sunday night</span><span class="local" data-dow="0" data-time="20:00"></span><h3>International Online Prayer Connect</h3><p>Pray with the AFM family around the world.</p><a class="where" href="#prayer" style="color:#1B6FD1">On Zoom · meeting details below</a></div>
         </article>
       </div>
       <div class="visit">
@@ -445,7 +448,7 @@
           <h2>International Online Prayer Connect</h2>
           <p>Pray with Prophet Micah Felix Azanduna and the AFM family around the world. You are specially invited.</p>
           <div class="times" id="times">
-            <div><small>Ghana</small><strong>8:00 PM</strong></div>
+            <div><small>Ghana (GMT)</small><strong>8:00 PM</strong></div>
             <div><small>United Kingdom</small><strong data-tz="Europe/London">9:00 PM</strong></div>
             <div><small>USA (Eastern)</small><strong data-tz="America/New_York">4:00 PM</strong></div>
             <div><small>USA (Pacific)</small><strong data-tz="America/Los_Angeles">1:00 PM</strong></div>
@@ -898,23 +901,38 @@
   }
   document.querySelectorAll('button.copy[data-copy]').forEach(wireCopy);
 
-  // Prayer times: the meeting is Sunday 8:00 PM in Ghana (GMT all year).
-  // Work out the next one and show it in each city's time, plus the visitor's own.
+  // Service times are Ghana time, which is GMT (UTC) all year.
+  // Each service card shows the visitor's own time; the Prayer Connect card also lists a few cities.
   (function () {
     try {
       const now = new Date();
-      const next = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 20, 0));
-      let add = (7 - next.getUTCDay()) % 7;
-      if (add === 0 && now > next) add = 7;
-      next.setUTCDate(next.getUTCDate() + add);
-      const fmt = (tz, withDay) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true, weekday: withDay ? 'short' : undefined }).format(next).replace(/\s?(am|pm)/i, m => ' ' + m.trim().toUpperCase());
-      document.querySelectorAll('#times [data-tz]').forEach(el => {
-        const sameDay = new Intl.DateTimeFormat('en-GB', { timeZone: el.dataset.tz, weekday: 'short' }).format(next) === 'Sun';
-        el.textContent = fmt(el.dataset.tz, !sameDay);
-      });
+      const nextUtc = (dow, hh, mm) => {
+        const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), hh, mm));
+        let add = (dow - d.getUTCDay() + 7) % 7;
+        if (add === 0 && now > d) add = 7;
+        d.setUTCDate(d.getUTCDate() + add);
+        return d;
+      };
+      const ampm = s => s.replace(/\s?(am|pm)/i, m => ' ' + m.trim().toUpperCase());
+      const time = (d, tz) => ampm(new Intl.DateTimeFormat('en-GB', { timeZone: tz, hour: 'numeric', minute: '2-digit', hour12: true }).format(d));
+      const weekday = (d, tz) => new Intl.DateTimeFormat('en-GB', { timeZone: tz, weekday: 'long' }).format(d);
       const local = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      const when = new Intl.DateTimeFormat('en-GB', { weekday: 'long', hour: 'numeric', minute: '2-digit', hour12: true }).format(next).replace(/\s?(am|pm)/i, m => ' ' + m.trim().toUpperCase());
-      document.getElementById('yours').innerHTML = 'Where you are: <b>' + when + '</b>';
+      const city = local && local.includes('/') && !local.startsWith('Etc/') ? local.split('/').pop().replace(/_/g, ' ') : '';
+
+      document.querySelectorAll('.svc .local[data-dow]').forEach(el => {
+        const [hh, mm] = el.dataset.time.split(':').map(Number);
+        const d = nextUtc(Number(el.dataset.dow), hh, mm);
+        const sameDay = weekday(d, local) === weekday(d, 'UTC');
+        if (sameDay && time(d, local) === time(d, 'UTC')) return; // already on Ghana time
+        el.textContent = (city ? 'In ' + city + ': ' : 'Your time: ') + (sameDay ? '' : weekday(d, local) + ' ') + time(d, local);
+      });
+
+      const next = nextUtc(0, 20, 0);
+      document.querySelectorAll('#times [data-tz]').forEach(el => {
+        const sameDay = weekday(next, el.dataset.tz) === 'Sunday';
+        el.textContent = (sameDay ? '' : weekday(next, el.dataset.tz).slice(0, 3) + ' ') + time(next, el.dataset.tz);
+      });
+      document.getElementById('yours').innerHTML = 'Where you are: <b>' + weekday(next, local) + ' ' + time(next, local) + '</b>';
     } catch (e) { /* keep the printed times */ }
   })();
 </script>
