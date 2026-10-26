@@ -9,7 +9,7 @@
 <link rel="canonical" href="https://theafmchurch.org/">
 <meta property="og:type" content="website">
 <link rel="icon" href="favicon.png">
-<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Church", "name": "Alleluia Faith Mission Global Assembly", "alternateName": ["The AFM Church", "AFM Family Network"], "description": "Alleluia Faith Mission Global Assembly (The AFM Church) and the AFM Family Network, led by Prophet Micah Felix Azanduna (D.D).", "address": {"@type": "PostalAddress", "streetAddress": "The AFM Center, Asuakwa (opposite the old police checkpoint, Barracks)", "addressLocality": "Sunyani", "addressCountry": "GH"}, "email": "theafmfamily@gmail.com", "url": "https://theafmchurch.org/", "logo": "https://theafmchurch.org/logo.png", "image": "https://theafmchurch.org/hero-cut.png", "founder": {"@type": "Person", "name": "Prophet Micah Felix Azanduna (D.D)", "alternateName": ["The Brand AFM", "Rabbi Micah"]}, "sameAs": ["https://youtube.com/@thebrandmicah", "https://theafmpodcast.podbean.com/", "https://www.facebook.com/share/1MbmmFb6Nx/", "https://www.instagram.com/thebrandafm", "https://t.me/rabbimicah", "https://www.tiktok.com/@dr_micah_azanduna"], "event": [{"@type": "Event", "name": "International Word Assembly", "eventSchedule": {"@type": "Schedule", "byDay": "https://schema.org/Sunday", "startTime": "08:00", "scheduleTimezone": "Africa/Accra", "repeatFrequency": "P1W"}, "location": {"@type": "Place", "name": "The AFM Center, Sunyani"}}, {"@type": "Event", "name": "Time with the Rabbi", "eventSchedule": {"@type": "Schedule", "byDay": "https://schema.org/Tuesday", "startTime": "18:00", "scheduleTimezone": "Africa/Accra", "repeatFrequency": "P1W"}, "location": {"@type": "Place", "name": "The AFM Center, Sunyani"}}, {"@type": "Event", "name": "Friday Miracle Service", "eventSchedule": {"@type": "Schedule", "byDay": "https://schema.org/Friday", "startTime": "18:00", "scheduleTimezone": "Africa/Accra", "repeatFrequency": "P1W"}, "location": {"@type": "Place", "name": "The AFM Center, Sunyani"}}, {"@type": "Event", "name": "International Online Prayer Connect", "eventAttendanceMode": "https://schema.org/OnlineEventAttendanceMode", "eventSchedule": {"@type": "Schedule", "byDay": "https://schema.org/Sunday", "startTime": "20:00", "scheduleTimezone": "Africa/Accra", "repeatFrequency": "P1W"}, "location": {"@type": "VirtualLocation", "url": "https://zoom.us/j/76330941"}}]}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "Church", "name": "Alleluia Faith Mission Global Assembly", "alternateName": ["The AFM Church", "AFM Family Network"], "description": "Alleluia Faith Mission Global Assembly (The AFM Church) and the AFM Family Network, led by Prophet Micah Felix Azanduna (D.D).", "address": {"@type": "PostalAddress", "streetAddress": "The AFM Center, Asuakwa (opposite the old police checkpoint, Barracks)", "addressLocality": "Sunyani", "addressCountry": "GH"}, "email": "theafmfamily@gmail.com", "url": "https://theafmchurch.org/", "logo": "https://theafmchurch.org/logo.png", "image": "https://theafmchurch.org/hero-cut.png", "founder": {"@type": "Person", "name": "Prophet Micah Felix Azanduna (D.D)", "alternateName": ["The Brand AFM", "Rabbi Micah"]}, "sameAs": ["https://youtube.com/@thebrandmicah", "https://theafmpodcast.podbean.com/", "https://www.facebook.com/share/1MbmmFb6Nx/", "https://www.instagram.com/thebrandafm", "https://t.me/rabbimicah", "https://www.tiktok.com/@dr_micah_azanduna"]}</script>
 <style>body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
 <title>The AFM Church · Alleluia Faith Mission Global Assembly</title>
 <meta name="description" content="Alleluia Faith Mission Global Assembly (The AFM Church) and the AFM Family Network, led by Prophet Micah Felix Azanduna (D.D). Prayer meetings, live services, sermons, books and giving.">
@@ -723,10 +723,63 @@
     return r.json();
   }
 
+  // Event data for Google: the next date of each weekly service (read from the service cards above)
+  // and any announcement with an event date. Built on each visit so the dates never go stale.
+  const SITE = 'https://theafmchurch.org/';
+  const CHURCH = { '@type': 'Organization', name: 'The AFM Church', url: SITE };
+  const PROPHET = { '@type': 'Person', name: 'Prophet Micah Felix Azanduna (D.D)' };
+  const CENTER = { '@type': 'Place', name: 'The AFM Center, Asuakwa, Sunyani', address: { '@type': 'PostalAddress', streetAddress: 'The AFM Center, Asuakwa (opposite the old police checkpoint, Barracks)', addressLocality: 'Sunyani', addressRegion: 'Bono', addressCountry: 'GH' } };
+  const FREE = (url) => ({ '@type': 'Offer', price: '0', priceCurrency: 'GHS', availability: 'https://schema.org/InStock', url, validFrom: new Date().toISOString().slice(0, 10) });
+  // Ghana is on GMT all year, so service times are UTC.
+  const iso = d => d.toISOString().slice(0, 19) + '+00:00';
+  function nextOccurrence(dow, time) {
+    const [h, m] = time.split(':').map(Number), now = new Date();
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m));
+    d.setUTCDate(d.getUTCDate() + ((dow - d.getUTCDay() + 7) % 7));
+    if (d <= now) d.setUTCDate(d.getUTCDate() + 7);
+    return d;
+  }
+  function serviceEvent(card) {
+    const t = card.querySelector('.local[data-dow][data-time]'); if (!t) return null;
+    const start = nextOccurrence(Number(t.dataset.dow), t.dataset.time), end = new Date(start.getTime() + 2 * 3600e3);
+    const online = card.classList.contains('online');
+    return {
+      '@type': 'Event', name: card.querySelector('h3').textContent.trim(),
+      description: card.querySelector('p').textContent.trim(),
+      startDate: iso(start), endDate: iso(end),
+      eventStatus: 'https://schema.org/EventScheduled',
+      eventAttendanceMode: online ? 'https://schema.org/OnlineEventAttendanceMode' : 'https://schema.org/OfflineEventAttendanceMode',
+      location: online ? { '@type': 'VirtualLocation', url: SITE + '#prayer' } : CENTER,
+      image: [SITE + 'hero-cut.png', SITE + 'about.jpg'],
+      organizer: CHURCH, performer: PROPHET, offers: FREE(SITE + (online ? '#prayer' : '#services')),
+    };
+  }
+  function announcementEvent(a) {
+    const timed = /^\d{2}:\d{2}/.test(a.event_time || '');
+    const start = timed ? new Date(a.event_date + 'T' + a.event_time.slice(0, 5) + ':00Z') : null;
+    const image = a.flyer_path ? SB + '/storage/v1/object/public/flyers/' + a.flyer_path.split('/').map(encodeURIComponent).join('/') : SITE + 'hero-cut.png';
+    return {
+      '@type': 'Event', name: a.title, description: a.body.length > 300 ? a.body.slice(0, 297) + '…' : a.body,
+      startDate: timed ? iso(start) : a.event_date, endDate: timed ? iso(new Date(start.getTime() + 3 * 3600e3)) : a.event_date,
+      eventStatus: 'https://schema.org/EventScheduled', eventAttendanceMode: 'https://schema.org/OfflineEventAttendanceMode',
+      location: CENTER, image: [image], organizer: CHURCH, performer: PROPHET, offers: FREE(SITE + '#news'),
+    };
+  }
+  function addEventData(events) {
+    const today = new Date().toISOString().slice(0, 10);
+    events = events.filter(e => e && e.endDate.slice(0, 10) >= today);
+    if (!events.length) return;
+    const tag = document.createElement('script'); tag.type = 'application/ld+json';
+    tag.textContent = JSON.stringify({ '@context': 'https://schema.org', '@graph': events });
+    document.head.append(tag);
+  }
+  addEventData([...document.querySelectorAll('#svcGrid .svc')].map(serviceEvent));
+
   // Announcements
-  getJSON('/rest/v1/announcements?select=id,title,body,flyer_path,event_date,created_at&published=eq.true&order=created_at.desc&limit=6').then(rows => {
+  getJSON('/rest/v1/announcements?select=id,title,body,flyer_path,event_date,event_time,created_at&published=eq.true&order=created_at.desc&limit=6').then(rows => {
     if (!rows.length) return;
     const list = document.getElementById('newsList'); list.innerHTML = '';
+    addEventData(rows.filter(a => a.event_date).map(announcementEvent));
     rows.forEach(a => {
       const card = el('article', 'post');
       if (a.flyer_path) { const img = el('img'); img.src = SB + '/storage/v1/object/public/flyers/' + a.flyer_path.split('/').map(encodeURIComponent).join('/'); img.alt = a.title; img.loading = 'lazy'; card.append(img); }
