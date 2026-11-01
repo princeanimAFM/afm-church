@@ -2,4 +2,5 @@
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url><loc>https://theafmchurch.org/</loc><changefreq>weekly</changefreq><priority>1.0</priority></url>
   <url><loc>https://theafmchurch.org/privacy.html</loc><changefreq>yearly</changefreq><priority>0.3</priority></url>
+  <url><loc>https://theafmchurch.org/welcome/</loc></url>
 </urlset>
