@@ -2,3 +2,5 @@ User-agent: *
 Allow: /
 
 Sitemap: https://theafmchurch.org/sitemap.xml
+Disallow: /welcome/guide/
+Disallow: /welcome/team.html
