@@ -45,6 +45,11 @@
   function lastServices(kind, n) { var s0 = serviceDay(kind), out = []; for (var i = 0; i < n; i++) out.push(Care.addDays(s0, -7 * i)); return out; }
   function lastSundays(n) { return lastServices('sunday', n); }
   function attended(mid, day, kind, prog) { return S.attMap[mid + '|' + day + '|' + kind + '|' + (prog || '')]; }
+  /** The reason a member gave for missing a service, if they did. */
+  function absence(mid, day, kind, prog) { return (S.absMap || {})[mid + '|' + day + '|' + kind + '|' + (prog || '')]; }
+  var REASONS = [['sick', '🤒 I was sick'], ['travelling', '🧳 I was travelling'], ['work', '💼 Work'], ['family', '🏠 A family matter'], ['transport', '🚌 Transport'], ['other', '✏️ Something else']];
+  function reasonText(r) { return { sick: 'sick', travelling: 'travelling', work: 'work', family: 'family matter', transport: 'transport', other: 'other reason' }[r] || r; }
+  function reasonLine(a) { return a ? '💬 Couldn\'t come: <b>' + esc(reasonText(a.reason)) + '</b>' + (a.note ? ' · “' + esc(a.note) + '”' : '') : ''; }
   function sundayStats(m, kind) {
     kind = kind || 'sunday';
     var joined = m.joined_at || day(m.created_at) || '2000-01-01';
@@ -114,9 +119,12 @@
         S.groups = d.groups; S.staff = d.staff; S.visitors = d.visitors; S.notes = d.visitor_notes; S.members = d.members; S.prayers = d.prayers;
         S.programs = d.programs || [];
         S.attMap = {}; (d.attendance || []).forEach(function (a) { S.attMap[a.member_id + '|' + a.seen_on + '|' + a.kind + '|' + (a.program_id || '')] = a; });
+        S.reports = d.reports || [];
+        S.absMap = {}; (d.absences || []).forEach(function (a) { S.absMap[a.member_id + '|' + a.seen_on + '|' + a.kind + '|' + (a.program_id || '')] = a; });
         S.loaded = true;
         if (Store.mode === 'demo') demoRoles();
         render();
+        if (S.openAfterLoad) { var k = S.openAfterLoad; S.openAfterLoad = null; openSheet(k); }
       }, fail);
     }, 150);
   }
@@ -135,7 +143,7 @@
       $('banner').innerHTML = '<div class="banner"><b>Preview</b> with sample people. Nothing leaves this phone. <button class="back" id="reset">Reset</button> · <a href="team.html?signin=1">See the sign-in screen</a></div>';
       $('reset').onclick = function () { Store.reset(); Care.toast('Sample data reset.'); };
       demoRoles();
-      $('role').onchange = function () { Store.setRole(this.value); S.tab = 'overview'; S.groupId = null; signedIn(); };
+      $('role').onchange = function () { Store.setRole(this.value); S.tab = 'overview'; S.groupId = null; S.missed = null; closeSheet(); signedIn(); };
       Store.subscribe(reload);
       if (inviteToken()) { $('demo-roles').hidden = true; $('banner').innerHTML = '<div class="banner"><b>Preview</b> of an invite link. No real code is sent; type any 6 digits.</div>'; return inviteFlow(inviteToken()); }
       if (/[?&]signin/.test(location.search)) { $('demo-roles').hidden = true; return signInScreen(); }
@@ -228,9 +236,32 @@
       $('sub').textContent = label + ' · ' + C.church;
       $('nav').hidden = false;
       if (isLeader()) S.groupId = m.group_id;
+      openFromLink();
+      S.missedLink = missedLink();
+      checkPush();
       reload();
     });
   }
+
+  /** A notification opens team.html#after=kind|day|program: show that service's summary on Home. */
+  function openFromLink() {
+    var rp = /#report=(\d{4}-\d\d)/.exec(location.hash);
+    if (rp || /#reports/.test(location.hash)) {
+      var key = rp ? 'report:' + rp[1] + '-01' : 'reports';
+      history.replaceState(null, '', location.pathname + location.search);
+      S.openAfterLoad = key; return;
+    }
+    var m = /#after=([a-z]+)\|(\d{4}-\d\d-\d\d)\|?([0-9a-z-]*)/i.exec(location.hash);
+    if (!m) return;
+    S.after = { kind: m[1], day: m[2], prog: m[3] || '' }; S.tab = 'overview';
+    history.replaceState(null, '', location.pathname + location.search);
+    setTimeout(function () { var el = $('after'); if (el) el.scrollIntoView({ block: 'start' }); }, 700);
+  }
+  window.addEventListener('hashchange', function () {
+    if (S.me && /#(after|report)/.test(location.hash)) { openFromLink(); render(); if (S.openAfterLoad && S.loaded) { var k = S.openAfterLoad; S.openAfterLoad = null; openSheet(k); } }
+    if (S.me && /#missed=/.test(location.hash)) { var id = missedLink(); if (S.missed) askMissed(id); else S.missedLink = id; }
+  });
+  function missedLink() { var m = /#missed=([^&]+)/.exec(location.hash); if (!m) return null; history.replaceState(null, '', location.pathname + location.search); return decodeURIComponent(m[1]); }
 
   /* ---------- layout ---------- */
   function tabs() {
@@ -277,6 +308,124 @@
     if (S.sheet) openSheet(S.sheet, true);
   }
 
+  /* ---------- one person, more than one group ---------- */
+  /** The same person in two groups (choir and a fellowship) shares a sign-in or phone number. */
+  function personKey(m) { return m.login_phone || m.login_email || m.login || Care.intl(m.phone) || m.id; }
+  function people(list) { var k = {}; list.forEach(function (m) { k[personKey(m)] = 1; }); return Object.keys(k).length; }
+
+  /* ---------- phone notifications ---------- */
+  S.push = 'checking';
+  function isIOS() { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); }
+  function standalone() { return (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true; }
+  function pushReady() { return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window; }
+  function swReg() { return navigator.serviceWorker.register('sw.js'); }
+  function keyBytes(b64) {
+    var pad = '='.repeat((4 - b64.length % 4) % 4), raw = atob((b64 + pad).replace(/-/g, '+').replace(/_/g, '/')), out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  function checkPush() {
+    if (!(isPastor() || isLeader() || isMember() || role() === 'pa')) { S.push = 'none'; return; }
+    if (Store.mode === 'demo') { S.push = S.push === 'on' ? 'on' : 'off'; return; }
+    if (!C.pushKey) { S.push = 'none'; return; }
+    if (!pushReady()) { S.push = isIOS() && !standalone() ? 'ios' : 'unsupported'; render(); return; }
+    if (Notification.permission === 'denied') { S.push = 'blocked'; render(); return; }
+    swReg().then(function (reg) { return reg.pushManager.getSubscription(); }).then(function (sub) { S.push = sub ? 'on' : 'off'; render(); }, function () { S.push = 'unsupported'; render(); });
+  }
+  function pushOn() {
+    if (Store.mode === 'demo') { S.push = 'on'; Care.toast('Preview: notifications would now be on for this phone.'); return render(); }
+    Notification.requestPermission().then(function (p) {
+      if (p !== 'granted') { S.push = p === 'denied' ? 'blocked' : 'off'; render(); throw new Error('Notifications weren\'t allowed.'); }
+      return swReg();
+    }).then(function (reg) {
+      return reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: keyBytes(C.pushKey) }).then(function (sub) {
+        var j = sub.toJSON();
+        return Store.savePush(j.endpoint, j.keys.p256dh, j.keys.auth).then(function () {
+          S.push = 'on'; render();
+          reg.showNotification('Church Care', { body: isMember() ? 'Reminders are on. God bless you!' : 'Notifications are on. You\'ll get a short update after each service.', icon: 'assets/icon-192.png' });
+        });
+      });
+    }).catch(fail);
+  }
+  function pushOff() {
+    if (Store.mode === 'demo') { S.push = 'off'; return render(); }
+    swReg().then(function (reg) { return reg.pushManager.getSubscription(); }).then(function (sub) {
+      if (!sub) return;
+      return Store.dropPush(sub.endpoint).then(function () { return sub.unsubscribe(); });
+    }).then(function () { S.push = 'off'; Care.toast('Notifications are off on this phone.'); render(); }, fail);
+  }
+  function pushCard() {
+    var who = isLeader() ? 'who came from your group, who to follow up, and why members missed' : 'how many came, which groups haven\'t marked attendance, and who still needs to sign up';
+    if (S.push === 'off' && isMember()) return '<div class="card top sky" style="margin-top:12px"><div class="name">🔔 Turn on church reminders</div>' +
+      '<div class="meta">If you\'re not marked present at a Sunday service or program, we\'ll check on you the next morning. You can tell your leader you were there, or why you couldn\'t come.</div>' +
+      '<div class="actions" style="margin-bottom:0"><button class="btn sm blue" data-push="on">Turn on</button></div></div>';
+    if (S.push === 'off') return '<div class="card top sky"><div class="row"><div class="grow"><div class="name">🔔 Get an update after each service</div>' +
+      '<div class="meta">A notification on this phone about 2 hours after each service: ' + who + '.</div></div></div>' +
+      '<div class="actions" style="margin-bottom:0"><button class="btn sm blue" data-push="on">Turn on notifications</button></div></div>';
+    if (S.push === 'on') return '<p class="meta" style="margin:8px 0 0">🔔 ' + (isMember() ? 'Church reminders are' : 'Updates after each service are') + ' on for this phone · <button class="back" data-push="off" style="font-size:inherit;padding:0">Turn off</button></p>';
+    if (S.push === 'ios') return '<div class="banner">🔔 To get an update after each service on iPhone: tap <b>Share</b> → <b>Add to Home Screen</b>, then open Church Care from your home screen.</div>';
+    if (S.push === 'blocked') return '<div class="banner">🔔 Notifications are blocked for Church Care on this phone. To get updates after each service, allow notifications for this site in your browser settings.</div>';
+    return '';
+  }
+
+  /* ---------- after the service ---------- */
+  /** Services that have happened recently, newest first: [kind, day, program id, label]. */
+  function recentServices() {
+    var t = Care.today(), out = [];
+    ['sunday', 'online', 'tuesday', 'friday'].forEach(function (k) { var d = serviceDay(k); out.push([k, d, null, kindName(k) + ', ' + Care.fmt(d)]); });
+    (S.programs || []).forEach(function (p) { if (p.starts_on <= t && p.ends_on >= Care.addDays(t, -14)) progDays(p).forEach(function (d) { out.push(['special', d, p.id, p.title + ', ' + Care.fmt(d)]); }); });
+    var order = { sunday: 0, online: 1, special: 2, tuesday: 3, friday: 3 };
+    return out.sort(function (a, b) { return a[1] < b[1] ? 1 : a[1] > b[1] ? -1 : order[a[0]] - order[b[0]]; });
+  }
+  function afterService() {
+    if (!(can('groups') || isLeader())) return '';
+    var list = recentServices(), cur = S.after && list.filter(function (x) { return x[0] === S.after.kind && x[1] === S.after.day && (x[2] || '') === (S.after.prog || ''); })[0];
+    if (!cur) { cur = list.filter(function (x) { return x[0] !== 'online' || S.members.some(function (m) { return attended(m.id, x[1], 'online'); }); })[0]; }
+    if (!cur) return '';
+    var k = cur[0], d = cur[1], pid = cur[2];
+    var h = '<h2 class="sec" id="after">After the service</h2><div class="chips">' + list.slice(0, 6).map(function (x) {
+      return '<button class="chip" data-after="' + x[0] + '|' + x[1] + '|' + (x[2] || '') + '" aria-pressed="' + (x === cur) + '">' + esc(x[3]) + '</button>';
+    }).join('') + '</div>';
+    var here = function (m) { return attended(m.id, d, k, pid); };
+    var pool = S.members.filter(function (m) { return (m.joined_at || '2000-01-01') <= d || here(m); });
+    if (isLeader()) {
+      var came = pool.filter(here), missedAll = pool.filter(function (m) { return !here(m); });
+      var why = missedAll.filter(function (m) { return absence(m.id, d, k, pid); }), missed = missedAll.filter(function (m) { return !absence(m.id, d, k, pid); });
+      var said = came.filter(function (m) { var a = here(m); return a && a.by_self; });
+      var twice = k in WEEKLY ? missed.filter(function (m) { return sundayStats(m, k).row >= 2; }) : [];
+      var off = S.members.filter(function (m) { return !m.joined_app_at; });
+      h += '<div class="card top green"><div class="name">' + came.length + ' of ' + pool.length + ' came</div>' +
+        (came.length ? '<div class="meta">' + esc(came.map(function (m) { return m.name; }).join(', ')) + '</div>' : '<div class="meta">No one is marked present yet. Mark who came in My group, or ask members to tap "I was in church".</div>') + '</div>';
+      if (said.length) h += '<div class="card top sky"><div class="name">Said they came (' + said.length + ')</div><div class="meta">' + esc(said.map(function (m) { return m.name; }).join(', ')) +
+        '</div><div class="meta" style="margin-top:4px">They marked themselves present. If you didn\'t see them, have a quick word.</div></div>';
+      if (why.length) h += '<div class="card top red"><div class="name">Told you why they missed (' + why.length + ')</div>' + why.map(function (m) {
+        return '<div class="row" style="padding:6px 0;border-top:1px solid var(--line)"><div class="grow"><div class="name">' + esc(m.name) + '</div><div class="meta">' + reasonLine(absence(m.id, d, k, pid)) + '</div></div>' +
+          (contactButtons(m.phone, 'Hello ' + Care.first(m.name) + ', this is ' + S.me.name + ' from ' + C.church + '. Thank you for letting us know. We are praying for you. God bless you.') || '') + '</div>';
+      }).join('') + '</div>';
+      if (missed.length) h += '<div class="card top gold"><div class="name">Not marked present (' + missed.length + ')</div><div class="meta">' + esc(missed.map(function (m) { return m.name; }).join(', ')) + '</div>' +
+        (twice.length ? '<div class="meta" style="margin-top:4px"><b style="color:var(--red)">Missed 2 or more in a row:</b> ' + esc(twice.map(function (m) { return m.name; }).join(', ')) + '</div>' : '') +
+        (k in WEEKLY ? '<div class="actions" style="margin-bottom:0"><button class="btn sm alt" data-tab="away">💛 Send them a message</button></div>' : '') + '</div>';
+      if (off.length) h += '<div class="card top sky"><div class="name">Not on the app yet (' + off.length + ')</div><div class="meta">' + esc(off.map(function (m) { return m.name; }).join(', ')) + '</div>' +
+        '<div class="actions" style="margin-bottom:0"><button class="btn sm alt" data-tab="groups">Send them the join link</button></div></div>';
+      return h;
+    }
+    var all = pool.filter(here), self = all.filter(function (m) { var a = here(m); return a && a.by_self; });
+    var newv = S.visitors.filter(function (v) { return day(v.created_at) === d; }).length;
+    var gave = people(pool.filter(function (m) { return !here(m) && absence(m.id, d, k, pid); }));
+    h += '<div class="tiles">' + tile(people(all), 'People marked present') + tile(people(self), 'Checked themselves in') + tile(gave, 'Told their leader why they missed') + tile(newv, 'New visitors that day') +
+      tile(people(S.members.filter(function (m) { return !m.joined_app_at; })), 'Members not on the app yet') + '</div>';
+    var noLeader = isPastor() ? S.groups.filter(function (g) { return !S.staff.some(function (x) { return x.role === 'leader' && x.group_id === g.id && x.joined_app_at; }); }) : [];
+    h += '<div class="card scroll"><table class="table"><thead><tr><th>Group</th><th class="n">Came</th><th class="n">Not on app</th></tr></thead><tbody>' + S.groups.map(function (g) {
+      var gm = pool.filter(function (m) { return m.group_id === g.id; }), c = gm.filter(here).length, off = S.members.filter(function (m) { return m.group_id === g.id && !m.joined_app_at; }).length;
+      return '<tr><td><b>' + esc(g.name) + '</b>' + (gm.length && !c ? ' <span class="pill new">Not marked yet</span>' : '') +
+        (noLeader.indexOf(g) >= 0 ? '<div class="meta" style="color:var(--red)">Leader not on the app yet</div>' : '') + '</td>' +
+        '<td class="n">' + c + '<span class="meta">/' + gm.length + '</span></td><td class="n">' + off + '</td></tr>';
+    }).join('') + '</tbody></table></div>' +
+      '<p class="meta">Someone in two groups (the choir and a fellowship) shows in both groups but is counted once in the totals.' +
+      (noLeader.length ? ' To bring a leader in, open <b>Team & groups</b> and tap <b>Invite leader</b>.' : '') + '</p>';
+    return h;
+  }
+
   /* ---------- overview ---------- */
   function tile(n, label, alert) { return '<div class="tile' + (alert ? ' alert' : '') + '"><b>' + n + '</b><span>' + label + '</span></div>'; }
   function viewOverview() {
@@ -289,7 +438,10 @@
     var waiting = vs.filter(function (v) { return v.status === 'new' && !v.assigned_to; });
     var h = '';
     if (role() === 'pa') h += '<div class="banner ok">You are the pastor\'s PA. You can see: ' + esc(AREAS.filter(function (a) { return can(a[0]); }).map(function (a) { return a[1]; }).join(', ') || 'nothing yet') + '.</div>';
-    if (isPastor()) h += '<div class="actions"><button class="btn sm alt" data-act="team">👥 Team & groups (' + S.staff.length + ')</button><button class="btn sm alt" data-act="qr">QR code page</button></div>';
+    h += pushCard();
+    if (isPastor()) h += '<div class="actions"><button class="btn sm alt" data-act="team">👥 Team & groups (' + S.staff.length + ')</button><button class="btn sm alt" data-act="reports">📝 Monthly reports</button><button class="btn sm alt" data-act="qr">QR code page</button></div>';
+    else if (can('groups')) h += '<div class="actions"><button class="btn sm alt" data-act="reports">📝 Monthly reports</button></div>';
+    h += reportDueCard();
     h += '<div class="tiles">' +
       tile(recent.length, 'New visitors, last 30 days') +
       tile(recent.length ? Math.round(reached / recent.length * 100) + '%' : '–', 'Reached (of those)') +
@@ -299,11 +451,12 @@
     if (isLeader()) { var nfy = vs.filter(function (v) { return v.status === 'new' && !v.seen_by_leader; }).length; h += tile(nfy, 'New visitors for you', nfy); }
     if (can('groups') || isLeader()) {
       var ls = lastSundays(1)[0], pool = ms.filter(function (m) { return (m.joined_at || '2000-01-01') <= ls; });
-      var away = ms.filter(isAway).length, came = pool.filter(function (m) { return attended(m.id, ls, 'sunday'); }).length;
-      h += tile(came + '<span style="font-size:.9rem;color:var(--ink-3)">/' + pool.length + '</span>', 'At church last Sunday') + tile(away, 'Away ' + C.awayWeeks + '+ weeks', away) + tile(ms.length, 'Members on the list');
+      var away = people(ms.filter(isAway)), came = people(pool.filter(function (m) { return attended(m.id, ls, 'sunday'); }));
+      h += tile(came + '<span style="font-size:.9rem;color:var(--ink-3)">/' + people(pool) + '</span>', 'At church last Sunday') + tile(away, 'Away ' + C.awayWeeks + '+ weeks', away) + tile(people(ms), 'Members on the list');
     }
     if (canPrayer() || isLeader()) h += tile(S.prayers.filter(function (p) { return p.status === 'open'; }).length, 'Open prayer requests');
     h += '</div>';
+    h += afterService();
 
     var toWelcome = vs.filter(function (v) { return !v.welcomed_at && v.phone && v.status !== 'joined'; });
     if (toWelcome.length) {
@@ -554,13 +707,124 @@
   function loadMember() {
     var gs = S.me.groups || [{ group_id: S.me.group_id }];
     if (!S.groupId || !gs.some(function (g) { return g.group_id === S.groupId; })) S.groupId = gs[0].group_id;
-    Promise.all(gs.map(function (g) { return Store.groupView(g.group_id); }).concat([Store.myPrayers(), Store.groups(), Store.myAttendance(S.groupId), Store.programs()])).then(function (r) {
+    Promise.all(gs.map(function (g) { return Store.groupView(g.group_id); }).concat([Store.myPrayers(), Store.groups(), Store.myAttendance(S.groupId), Store.programs(), Store.myMissed().catch(function () { return []; })])).then(function (r) {
+      S.missed = r[gs.length + 4] || [];
       S.mview = {}; gs.forEach(function (g, i) { S.mview[g.group_id] = r[i]; });
       S.myPrayers = r[gs.length]; S.groups = r[gs.length + 1]; S.myAtt = r[gs.length + 2]; S.programs = r[gs.length + 3] || [];
+      var ml = S.missedLink; S.missedLink = null;
+      setTimeout(function () { askMissed(ml); }, 300);
       S.loaded = true;
       if (Store.mode === 'demo') demoRoles();
       render();
     }, fail);
+  }
+  /* ---------- monthly reports ---------- */
+  function lastMonth() { var n = new Date(); return Care.ymd(new Date(n.getFullYear(), n.getMonth() - 1, 1)); }
+  function monthLabel(mo) { return Care.parse(mo).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }); }
+  function reportOf(gid, mo) { return (S.reports || []).filter(function (r) { return r.group_id === gid && String(r.month).slice(0, 10) === mo; })[0]; }
+  /** The month's figures for a group, worked out from what the app already knows. */
+  function monthFigures(gid, mo) {
+    var p = Care.parse(mo), end = Care.ymd(new Date(p.getFullYear(), p.getMonth() + 1, 0)), t = Care.today(), last = end < t ? end : t;
+    var gm = S.members.filter(function (m) { return m.group_id === gid; }), inMonth = function (d) { return d >= mo && d <= end; };
+    var services = {};
+    [['sunday', 0], ['tuesday', 2], ['friday', 5]].forEach(function (k) {
+      var counts = [];
+      for (var d = mo; d <= last; d = Care.addDays(d, 1)) if (Care.parse(d).getDay() === k[1]) {
+        var c = gm.filter(function (m) { return attended(m.id, d, k[0]); }).length;
+        if (c) counts.push(c);
+      }
+      services[k[0]] = { held: counts.length, avg: counts.length ? Math.round(counts.reduce(function (a, b) { return a + b; }, 0) / counts.length) : 0 };
+    });
+    var vs = S.visitors.filter(function (v) { return v.assigned_to === gid && inMonth(day(v.created_at)); });
+    var ps = S.prayers.filter(function (x) { return x.assigned_to === gid && !x.to_pastor && inMonth(day(x.created_at)); });
+    var reasons = Object.keys(S.absMap || {}).filter(function (k) { var a = S.absMap[k]; return inMonth(a.seen_on) && gm.some(function (m) { return m.id === a.member_id; }); }).length;
+    return {
+      members: gm.filter(function (m) { return (m.joined_at || day(m.created_at)) <= end; }).length,
+      new_members: gm.filter(function (m) { return inMonth(m.joined_at || day(m.created_at)); }).length,
+      on_app: gm.filter(function (m) { return m.joined_app_at; }).length,
+      away: gm.filter(isAway).length,
+      services: services, visitors: vs.length, contacted_on_time: vs.filter(function (v) { return v.reached_at && v.due && v.reached_at <= v.due; }).length,
+      joined: vs.filter(function (v) { return v.status === 'joined'; }).length, reasons: reasons, prayers: ps.length, prayed: ps.filter(function (x) { return x.status === 'prayed'; }).length
+    };
+  }
+  function figuresTable(f) {
+    var sv = f.services || {}, row = function (label, v) { return '<tr><td>' + label + '</td><td class="n"><b>' + v + '</b></td></tr>'; };
+    var svc = function (k, label) { var x = sv[k] || {}; return row(label, x.held ? x.avg + ' <span class="meta">average, ' + x.held + ' service' + (x.held === 1 ? '' : 's') + ' marked</span>' : '<span class="meta">not marked</span>'); };
+    return '<div class="card"><table class="table"><tbody>' + row('Members at the end of the month', f.members) + row('New members', f.new_members) +
+      (f.on_app != null ? row('On the app', f.on_app) : '') + svc('sunday', 'Sunday service') + svc('tuesday', 'Time with the Rabbi') + svc('friday', 'Friday Miracle Service') +
+      row('New visitors given to the group', f.visitors) + row('Contacted on time', f.contacted_on_time) + row('Visitors who joined', f.joined) +
+      row('Members who said why they missed', f.reasons) + row('Prayer requests', f.prayers + (f.prayers ? ' <span class="meta">(' + f.prayed + ' prayed for)</span>' : '')) +
+      (f.away != null ? row('Away ' + C.awayWeeks + '+ weeks (at sending)', f.away) : '') + '</tbody></table></div>';
+  }
+  function reportDueCard() {
+    if (!isLeader()) return '';
+    var mo = lastMonth(), r = reportOf(S.me.group_id, mo);
+    if (r) return '<p class="meta" style="margin:8px 0 0">📝 Your ' + esc(monthLabel(mo)) + ' report was sent to the pastor · <button class="back" data-open="report:' + mo + '" style="font-size:inherit;padding:0">View or update</button></p>';
+    return '<div class="card top gold"><div class="name">📝 Your ' + esc(monthLabel(mo)) + ' report is due</div><div class="meta">The figures for ' + esc(groupName(S.me.group_id)) +
+      ' are ready. Add a few words on how the month went, then send it to the pastor.</div><div class="actions" style="margin-bottom:0"><button class="btn sm blue" data-open="report:' + mo + '">Write the report</button></div></div>';
+  }
+  function sheetReport(mo) {
+    if (!isLeader() || !/^\d{4}-\d\d-01$/.test(mo)) return null;
+    var gid = S.me.group_id, r = reportOf(gid, mo), f = monthFigures(gid, mo);
+    var prev = []; for (var i = 1; i <= 6; i++) { var n = Care.parse(lastMonth()); prev.push(Care.ymd(new Date(n.getFullYear(), n.getMonth() + 1 - i, 1))); }
+    return '<div class="kicker" style="margin-top:6px">Monthly report</div><h2>' + esc(groupName(gid)) + ', ' + esc(monthLabel(mo)) + '</h2>' +
+      '<div class="chips">' + prev.map(function (m) { return '<button class="chip" data-open="report:' + m + '" aria-pressed="' + (m === mo) + '">' + esc(Care.parse(m).toLocaleDateString('en-GB', { month: 'short' })) + (reportOf(gid, m) ? ' ✓' : '') + '</button>'; }).join('') + '</div>' +
+      (r ? '<div class="banner ok">Sent to the pastor on ' + Care.fmt(day(r.sent_at)) + '. You can update it and send again.</div>' : '') +
+      '<h2 class="sec">The figures</h2><p class="meta" style="margin-top:-4px">Worked out by the app from attendance, visitors and prayer requests.</p>' + figuresTable(f) +
+      '<h2 class="sec">In your words</h2><form data-report="' + mo + '">' +
+      '<div class="field"><label for="rp-high">How did the month go? Highlights and testimonies</label><textarea id="rp-high" maxlength="1500">' + esc(r ? r.highlights : '') + '</textarea></div>' +
+      '<div class="field"><label for="rp-needs">Challenges or needs</label><textarea id="rp-needs" maxlength="1500">' + esc(r ? r.needs : '') + '</textarea></div>' +
+      '<div class="field"><label for="rp-prayer">Prayer points for the group</label><textarea id="rp-prayer" maxlength="1500">' + esc(r ? r.prayer : '') + '</textarea></div>' +
+      '<button class="btn blue" type="submit">' + (r ? 'Update and send again' : 'Send to the pastor') + '</button></form>';
+  }
+  /** The pastor's (and a PA's) list: who has sent, month by month. */
+  function sheetReports() {
+    if (!can('groups')) return null;
+    var mo = S.repMonth || lastMonth(), months = [];
+    for (var i = 0; i < 6; i++) { var n = Care.parse(lastMonth()); months.push(Care.ymd(new Date(n.getFullYear(), n.getMonth() - i, 1))); }
+    var sent = S.groups.filter(function (g) { return reportOf(g.id, mo); }).length;
+    return '<h2>Monthly reports</h2><p class="meta">Each group leader sends a report at the start of the month: the app\'s figures plus their own words.</p>' +
+      '<div class="chips">' + months.map(function (m) { return '<button class="chip" data-repmonth="' + m + '" aria-pressed="' + (m === mo) + '">' + esc(monthLabel(m)) + '</button>'; }).join('') + '</div>' +
+      '<p><b>' + sent + ' of ' + S.groups.length + '</b> groups have sent their ' + esc(monthLabel(mo)) + ' report.</p>' +
+      S.groups.map(function (g) {
+        var r = reportOf(g.id, mo);
+        return '<div class="card' + (r ? ' tap' : '') + '"' + (r ? ' data-open="rview:' + r.id + '"' : '') + '><div class="row"><div class="grow"><div class="name">' + esc(g.name) + '</div><div class="meta">' + esc(g.leader_name || '') +
+          (r ? ' · sent ' + Care.fmt(day(r.sent_at)) : '') + '</div></div>' + (r ? '<span class="pill reached">Sent · Read ›</span>' : '<span class="pill new">Not yet</span>') + '</div></div>';
+      }).join('');
+  }
+  function sheetReportView(id) {
+    var r = (S.reports || []).filter(function (x) { return x.id === id; })[0];
+    if (!r) return null;
+    var para = function (label, txt) { return txt ? '<h2 class="sec">' + label + '</h2><div class="card"><p style="margin:0;white-space:pre-wrap">' + esc(txt) + '</p></div>' : ''; };
+    return '<button class="back" data-open="reports">‹ Monthly reports</button><div class="kicker" style="margin-top:6px">Monthly report</div><h2>' + esc(groupName(r.group_id)) + ', ' + esc(monthLabel(String(r.month).slice(0, 10))) + '</h2>' +
+      '<p class="meta">Sent by ' + esc(r.sent_by || 'the leader') + ' on ' + Care.fmt(day(r.sent_at)) + '</p>' +
+      para('Highlights and testimonies', r.highlights) + para('Challenges or needs', r.needs) + para('Prayer points', r.prayer) +
+      '<h2 class="sec">The figures</h2>' + figuresTable(r.figures || {});
+  }
+
+  /* ---------- "we missed you" ---------- */
+  function missedId(x) { return x.kind + '|' + x.seen_on + '|' + (x.program_id || ''); }
+  function dismissed() { try { return JSON.parse(localStorage.getItem('care-missed-later') || '{}'); } catch (e) { return {}; } }
+  /** After a service a member wasn't marked present at, ask them once (or when they tap the notification). */
+  function askMissed(id) {
+    if (!isMember() || S.sheet) return;
+    var list = S.missed || [], d = dismissed();
+    var x = id ? list.filter(function (y) { return missedId(y) === id; })[0] : list.filter(function (y) { return !d[missedId(y)]; })[0];
+    if (id && !x) return Care.toast('Thank you, you\'ve already answered for that service. 🙏');
+    if (x) openSheet('missed:' + missedId(x));
+  }
+  function sheetMissed(id) {
+    var x = (S.missed || []).filter(function (y) { return missedId(y) === id; })[0];
+    if (!x) return null;
+    var when = Care.parse(x.seen_on).toLocaleDateString('en-GB', { weekday: 'long', day: 'numeric', month: 'long' });
+    return '<div class="kicker" style="margin-top:6px">We missed you 💛</div><h2>' + esc(x.label) + '</h2><p class="meta" style="margin-top:2px">' + esc(when) + '</p>' +
+      '<p>We didn\'t see you marked present. We care about you, and your leader would love to know how you are.</p>' +
+      '<div class="actions"><button class="btn green" data-was="' + esc(id) + '">✓ I was there (I forgot to mark)</button></div>' +
+      '<h2 class="sec">I couldn\'t come</h2><form data-absent="' + esc(id) + '"><div class="chips" style="flex-wrap:wrap">' + REASONS.map(function (r, i) {
+        return '<label class="chip"><input type="radio" name="why" value="' + r[0] + '"' + (i === 0 ? ' required' : '') + ' style="margin-right:6px">' + r[1] + '</label>';
+      }).join('') + '</div><div class="field"><label for="why-note">Anything else? (optional, only your leader and the pastor see it)</label><textarea id="why-note" maxlength="300" placeholder="e.g. My child was unwell. Please pray for us."></textarea></div>' +
+      '<button class="btn blue" type="submit">Send to my leader</button></form>' +
+      '<div class="actions" style="margin-top:14px"><button class="back" data-later="' + esc(id) + '">Not now</button></div>';
   }
   function viewMemberHome() {
     var v = S.mview[S.groupId], g = v.group, ppl = v.people || [], h = '';
@@ -571,6 +835,7 @@
       '<div class="meta">Leader: <b>' + esc(g.leader_name || 'not set yet') + '</b></div>' +
       '<div class="actions">' + (v.leader_phone ? '<a class="btn sm wa" href="' + esc(Care.waLink(v.leader_phone, 'Hello ' + (g.leader_name || '') + ', this is ' + S.me.name + ' from ' + g.name + '.')) + '" target="_blank" rel="noopener">💬 Message my leader</a>' : '') +
       '<button class="btn sm blue" data-tab="prayer">🙏 Send a prayer request</button></div></div>';
+    h += pushCard();
     h += checkinCard();
     var on = ppl.filter(function (p) { return p.on_app; }).length;
     h += '<h2 class="sec">Our group</h2><p class="meta" style="margin-top:-4px">' + ppl.length + ' members · ' + on + ' on the app</p>' +
@@ -670,7 +935,7 @@
       h += '<p class="meta" style="margin-top:-4px">' + missed.length + ' of ' + pool.length + ' were not marked present on ' + Care.fmt(d) + '. A kind message is ready in WhatsApp.</p>';
       h += missed.map(function (m) {
         return '<div class="card top ' + (sundayStats(m, fk).row >= 2 ? 'red' : 'gold') + '"><div class="row">' + avatar(m.name) + '<div class="grow"><div class="name">' + esc(m.name) + '</div>' +
-          '<div class="meta">' + (!isLeader() ? esc(groupName(m.group_id)) + ' · ' : '') + statsText(m, fk) + '</div></div></div>' +
+          '<div class="meta">' + (!isLeader() ? esc(groupName(m.group_id)) + ' · ' : '') + statsText(m, fk) + '</div>' + (absence(m.id, d, fk) ? '<div class="meta">' + reasonLine(absence(m.id, d, fk)) + '</div>' : '') + '</div></div>' +
           '<div class="actions">' + (contactButtons(m.phone, missedMsg(m, d, fk)) || '<span class="meta">No number saved.</span>') + '</div></div>';
       }).join('');
     }
@@ -709,10 +974,13 @@
   /** Works out every figure from the numbers-only data the database gives (the whole church, or one group). */
   function growthStats(d, onlyGroup) {
     var t = d.today || Care.today(), keep = function (g) { return !onlyGroup || g === onlyGroup; };
-    var ms = d.members.filter(function (x) { return keep(x[0]); }).map(function (x) { return { g: x[0], joined: x[1] || t, app: x[2], seen: x[3] }; });
+    var ms = d.members.filter(function (x) { return keep(x[0]); }).map(function (x, i) { return { g: x[0], joined: x[1] || t, app: x[2], seen: x[3], who: x[4] || 'row' + i }; });
     var vs = d.visitors.filter(function (x) { return keep(x[0]); }).map(function (x) { return { g: x[0], made: x[1], status: x[2], due: x[3], reached: x[4] }; });
     var ps = d.prayers.filter(function (x) { return keep(x[0]); }).map(function (x) { return { pastor: x[1], made: x[2], status: x[3] }; });
-    var sun = {}; d.attendance.forEach(function (a) { if (a[2] === 'sunday' && keep(a[0])) sun[a[1]] = (sun[a[1]] || 0) + a[3]; });
+    var sun = {};
+    if (!onlyGroup && d.people_attendance) d.people_attendance.forEach(function (a) { if (a[1] === 'sunday') sun[a[0]] = a[2]; });
+    else d.attendance.forEach(function (a) { if (a[2] === 'sunday' && keep(a[0])) sun[a[1]] = (sun[a[1]] || 0) + a[3]; });
+    if (!onlyGroup) { var seenP = {}; ms = ms.sort(function (a, b) { return a.joined < b.joined ? -1 : 1; }).filter(function (m) { if (seenP[m.who]) return false; seenP[m.who] = 1; return true; }); }
     var months = [], n0 = Care.parse(t);
     for (var i = 11; i >= 0; i--) months.push(Care.ymd(new Date(n0.getFullYear(), n0.getMonth() - i, 1)).slice(0, 7));
     var sundays = [], s0 = Care.addDays(t, -n0.getDay());
@@ -935,7 +1203,11 @@
       parts[0] === 'new-staff' ? sheetStaff(null) :
       parts[0] === 'grp' ? sheetGroup(parts[1]) :
       parts[0] === 'new-group' ? sheetGroup(null) :
-      parts[0] === 'qr' ? sheetQr() : null;
+      parts[0] === 'qr' ? sheetQr() :
+      parts[0] === 'missed' ? sheetMissed(key.slice(7)) :
+      parts[0] === 'report' ? sheetReport(parts[1]) :
+      parts[0] === 'reports' ? sheetReports() :
+      parts[0] === 'rview' ? sheetReportView(parts[1]) : null;
     if (html === null) return closeSheet();
     var sh = $('sheet');
     var f = document.activeElement;
@@ -1105,6 +1377,22 @@
       Store.memberCheckin(S.groupId, c[0], c[1], c[2] === 'here', c[3] || null).then(function () { Care.toast(c[2] === 'here' ? 'Thank you! Your leader can see you were there. 🙏' : 'Removed.'); reload(); }, fail);
       return;
     }
+    var rm = e.target.closest('[data-repmonth]');
+    if (rm) { e.preventDefault(); e.stopPropagation(); S.repMonth = rm.dataset.repmonth; openSheet('reports', true); return; }
+    var ms = e.target.closest('[data-was],[data-later]');
+    if (ms) {
+      e.preventDefault(); e.stopPropagation();
+      if (ms.dataset.later) { var dl = dismissed(); dl[ms.dataset.later] = 1; try { localStorage.setItem('care-missed-later', JSON.stringify(dl)); } catch (x) { /* not kept */ } closeSheet(); return; }
+      var w = ms.dataset.was.split('|');
+      Store.memberCheckin(S.groupId, w[0], w[1], true, w[2] || null).then(function () { closeSheet(); Care.toast('Thank you! Your leader can see you were there. 🙏'); reload(); }, fail);
+      return;
+    }
+    var ab = e.target.closest('[data-after],[data-push]');
+    if (ab) {
+      e.preventDefault(); e.stopPropagation();
+      if (ab.dataset.push) return ab.dataset.push === 'on' ? pushOn() : pushOff();
+      var a = ab.dataset.after.split('|'); S.after = { kind: a[0], day: a[1], prog: a[2] || '' }; render(); return;
+    }
     var gg = e.target.closest('[data-gg],[data-tip]');
     if (gg) {
       e.preventDefault(); e.stopPropagation();
@@ -1129,6 +1417,21 @@
       if (!t) return Care.toast('One moment, the link is still being made.');
       window.open(Care.waLink(m.phone, 'Hello ' + Care.first(m.name) + '! ' + memberInviteText(g, t)), '_blank', 'noopener');
     }
+  }, true);
+  document.addEventListener('submit', function (e) {
+    if ('report' in e.target.dataset) {
+      e.preventDefault(); e.stopImmediatePropagation();
+      var mo = e.target.dataset.report, gid = S.me.group_id;
+      var row = { group_id: gid, month: mo, figures: monthFigures(gid, mo), highlights: $('rp-high').value.trim(), needs: $('rp-needs').value.trim(), prayer: $('rp-prayer').value.trim() };
+      if (!row.highlights && !row.needs && !row.prayer) return Care.toast('Please add a few words about the month.');
+      Store.saveReport(row).then(function () { closeSheet(); Care.toast('Report sent to the pastor. Thank you! 🙏'); reload(); }, fail);
+      return;
+    }
+    if (!('absent' in e.target.dataset)) return;
+    e.preventDefault(); e.stopImmediatePropagation();
+    var a = e.target.dataset.absent.split('|'), r = e.target.querySelector('input[name=why]:checked');
+    if (!r) return Care.toast('Please choose why you couldn\'t come.');
+    Store.memberAbsence(a[0], a[1], a[2] || null, r.value, $('why-note').value).then(function () { closeSheet(); Care.toast('Sent to your leader. We\'re praying for you. 🙏'); reload(); }, fail);
   }, true);
   document.addEventListener('submit', function (e) {
     if (!('mprayer' in e.target.dataset)) return;

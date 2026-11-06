@@ -10,6 +10,9 @@ window.CARE_CONFIG = {
   // How the team signs in. WhatsApp codes need Twilio set up in Supabase (see README); turn on when ready.
   signIn: { whatsapp: false, email: true, google: true },
 
+  // Public key for phone notifications after each service (the private half is a Supabase secret). Empty = off.
+  pushKey: 'BExspgto6Ya8ZUQ_k02ysOKXzZAgN14KViFblvrUPv-NOr6KmnCrQom-OQfb71vpy5DdJ9vmxC1RyX9i9Qzt5kw',
+
   church: 'The AFM Church',
   churchFull: 'Alleluia Faith Mission Global Assembly',
   pastor: 'Prophet Micah Felix Azanduna D.D',
