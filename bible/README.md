@@ -20,3 +20,9 @@ CC BY-SA 4.0 (credit shown in the app):
 - `twi.json` Akuapem Twi (`twi`), `asante.json` Asante Twi (`twiasante`), `ewe.json` Ewe (`ewe`), `hau.json` Hausa (`hausa`) © Biblica, Inc.
 
 Format: `{"books":[{"id":"GEN","name":"Genesis","chapters":[["verse 1","verse 2",...],...]},...]}`.
+
+Study Bible (built with `ministry-app/scripts/build-*.py`, downloaded once and kept on the phone):
+- `crossrefs.json` cross-references from OpenBible.info (CC BY), based on the Treasury of Scripture Knowledge
+- `dictionary.json` Easton's Bible Dictionary (1897, public domain)
+- `commentary.json` Matthew Henry's Concise Commentary (public domain)
+- `places.json` and `map/` Bible maps: places from OpenBible.info Bible Geocoding Data (CC BY 4.0); coastlines, lakes and rivers from Natural Earth (public domain); Leaflet 1.9.4 (BSD 2-clause)
