@@ -3,5 +3,6 @@ Allow: /
 Disallow: /welcome/guide/
 Disallow: /welcome/team.html
 Disallow: /welcome/practice/
+Disallow: /bible/
 
 Sitemap: https://theafmchurch.org/sitemap.xml
