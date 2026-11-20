@@ -1,0 +1,3 @@
+# ai.txt (https://spawning.ai/ai-txt): nothing on theafmchurch.org may be used to train AI.
+User-Agent: *
+Disallow: /
