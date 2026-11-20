@@ -35,6 +35,32 @@
       },
       signOut: function () { return sb.auth.signOut(); },
       onAuth: function (cb) { sb.auth.onAuthStateChange(function () { cb(); }); },
+      // Two-step sign-in with an authenticator app. Supabase calls a sign-in that passed it "aal2".
+      // The factor list comes fresh from the server (the copy kept in the session can be out of date after a reset).
+      twoStep: function () {
+        return Promise.all([sb.auth.mfa.getAuthenticatorAssuranceLevel(), sb.auth.mfa.listFactors()]).then(function (r) {
+          var aal = must(r[0]), f = must(r[1]);
+          return {
+            level: aal.currentLevel,
+            factor: (f.totp || [])[0] ? f.totp[0].id : null,
+            pending: (f.all || []).filter(function (x) { return x.factor_type === 'totp' && x.status !== 'verified'; }).map(function (x) { return x.id; })
+          };
+        });
+      },
+      // Starts setting up the app: clears a set-up that was started but not finished, then makes a new key.
+      twoStepStart: function () {
+        return this.twoStep().then(function (st) {
+          return Promise.all(st.pending.map(function (id) { return sb.auth.mfa.unenroll({ factorId: id }); }));
+        }).then(function () {
+          return sb.auth.mfa.enroll({ factorType: 'totp', issuer: 'AFM Church Care', friendlyName: 'Church Care ' + new Date().toISOString().slice(0, 16) }).then(must);
+        }).then(function (d) {
+          var svg = String(d.totp.qr_code || '').replace(/^data:image\/svg\+xml;utf-8,/, '');
+          return { id: d.id, secret: d.totp.secret, uri: d.totp.uri, qr: svg ? 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg) : null };
+        });
+      },
+      twoStepVerify: function (factorId, code) { return sb.auth.mfa.challengeAndVerify({ factorId: factorId, code: code }).then(must); },
+      twoStepTeam: function () { return sb.rpc('team_second_step').then(must); },
+      twoStepReset: function (staffId) { return sb.rpc('reset_second_step', { p_staff: staffId }).then(must); },
       me: function () {
         return sb.rpc('whoami').then(must).then(function (r) {
           if (!r) return null;
@@ -105,6 +131,8 @@
     try { role = localStorage.getItem(KEY + '-role') || 'pastor'; } catch (e) { /* not kept */ }
     function uid() { return 'd' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7); }
     function now() { return new Date().toISOString(); }
+    var LINK_HOURS = 12; // invite links stop working after this, as in the database
+    function linkAge(i) { return (Date.now() - Date.parse(i.created_at)) / 3600000; }
     function read() {
       try { var s = JSON.parse(localStorage.getItem(KEY)); if (s && s.visitors && s.groups) return s; } catch (e) { /* private window */ }
       return seed();
@@ -247,6 +275,14 @@
       // Preview only: no code is really sent; any code signs in.
       sendCode: function () { return Promise.resolve(); },
       verify: function () { return Promise.resolve(); },
+      // Practice: the two-step screens can be seen, but no real key is made and any 6 digits work.
+      twoStep: function () { return Promise.resolve({ level: 'aal1', factor: null, pending: [] }); },
+      twoStepStart: function () { return Promise.resolve({ id: 'practice', secret: 'PRACTICEKEYONLYNOTREALPRACTICE23', uri: null, qr: null }); },
+      twoStepVerify: function (id, code) { return /^\d{6}$/.test(code) ? Promise.resolve() : Promise.reject(new Error('Type the 6 digits the app shows.')); },
+      twoStepTeam: function () {
+        return Promise.resolve(data.staff.filter(function (x, i) { return x.joined_app_at && i % 2 === 0; }).map(function (x) { return { staff_id: x.id, since: x.joined_app_at }; }));
+      },
+      twoStepReset: function () { return Promise.resolve(); },
       signOut: function () { return Promise.resolve(); },
       onAuth: function () {},
       me: function () { return Promise.resolve(Object.assign({}, me())); },
@@ -352,7 +388,8 @@
             data.invites.forEach(function (i) { if (i.group_id === group && i.kind === 'leader' && !i.used_at) i.revoked = true; });
           } else {
             check(has(m, 'groups') || (m.role === 'leader' && m.group_id === group));
-            var ex = data.invites.filter(function (i) { return i.group_id === group && i.kind === 'member' && !i.revoked; })[0];
+            // like the database: reuse the group's link only while it has at least half its time left
+            var ex = data.invites.filter(function (i) { return i.group_id === group && i.kind === 'member' && !i.revoked && linkAge(i) < LINK_HOURS / 2; })[0];
             if (ex) return ex.token;
           }
           var t = (uid() + uid()).replace(/[^a-z0-9]/g, '').slice(0, 32);
@@ -368,15 +405,16 @@
       inviteInfo: function (token) {
         var i = find('invites', 'token', token);
         if (!i) return Promise.resolve(null);
-        var g = find('groups', 'id', i.group_id) || {};
-        return Promise.resolve({ kind: i.kind, group: g.name, tag: g.tag, leader: g.leader_name, valid: !i.revoked && (i.kind === 'member' || !i.used_at) });
+        var g = find('groups', 'id', i.group_id) || {}, left = Math.max(0, Math.floor((LINK_HOURS - linkAge(i)) * 3600));
+        return Promise.resolve({ kind: i.kind, group: g.name, tag: g.tag, leader: g.leader_name, valid: !i.revoked && left > 0 && (i.kind === 'member' || !i.used_at),
+          expires_at: new Date(Date.parse(i.created_at) + LINK_HOURS * 3600000).toISOString(), seconds_left: left });
       },
       // target: the WhatsApp number or email they signed in with (preview only; live uses the sign-in itself)
       acceptInvite: function (token, name, target) {
         var self = this;
         return Promise.resolve().then(function () {
           var i = find('invites', 'token', token);
-          if (!i || i.revoked) throw new Error('This invite link is no longer valid. Ask for a new one.');
+          if (!i || i.revoked || linkAge(i) >= LINK_HOURS) throw new Error('This invite link is no longer valid. Ask for a new one.');
           var login = /@/.test(target) ? target.toLowerCase() : Care.intl(target);
           if (!name) throw new Error('Please enter your name');
           if (i.kind === 'leader') {
